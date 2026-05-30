@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 import io
 import numpy as np
 import os
+import torch
+import ultralytics.nn.tasks
 
 from database import get_db, engine
 from models import User, Analysis, Base
@@ -63,6 +65,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+torch.serialization.add_safe_globals([ultralytics.nn.tasks.DetectionModel])
 model = YOLO("yolov8n.pt")
 print("Model loaded")
 
