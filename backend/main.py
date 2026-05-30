@@ -12,8 +12,6 @@ import io
 import numpy as np
 import os
 import torch
-import ultralytics.nn.tasks
-
 from database import get_db, engine
 from models import User, Analysis, Base
 
@@ -65,7 +63,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-torch.serialization.add_safe_globals([ultralytics.nn.tasks.DetectionModel])
+# Monkey-patch torch.load to use weights_only=False for compatibility with PyTorch 2.6.
+# Ultralytics calls torch.load() internally without this flag, causing errors when
+# loading YOLOv8 weights that contain arbitrary Python classes (e.g. Sequential).
+_original_torch_load = torch.load
+def patched_torch_load(f, *args, **kwargs):
+    if 'weights_only' not in kwargs:
+        kwargs['weights_only'] = False
+    return _original_torch_load(f, *args, **kwargs)
+torch.load = patched_torch_load
+
 model = YOLO("yolov8n.pt")
 print("Model loaded")
 
