@@ -73,7 +73,7 @@ def patched_torch_load(f, *args, **kwargs):
     return _original_torch_load(f, *args, **kwargs)
 torch.load = patched_torch_load
 
-model = YOLO("yolov8n.pt")
+model = YOLO("yolov8s.pt")
 print("Model loaded")
 
 # --- Helper functions ---
