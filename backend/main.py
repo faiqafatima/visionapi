@@ -150,15 +150,28 @@ async def analyze(
         ))
 
         x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-        cv2.rectangle(annotated, (x1, y1), (x2, y2), (59, 130, 246), 2)
+        color = (59, 130, 246)
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 1)
+
+        label_text = f"{label} {confidence:.0%}"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.45
+        text_thickness = 1
+        (text_width, text_height), baseline = cv2.getTextSize(label_text, font, font_scale, text_thickness)
+        text_top = max(y1 - text_height - baseline - 6, 0)
+        text_bottom = text_top + text_height + baseline + 6
+        text_right = min(x1 + text_width + 8, annotated.shape[1] - 1)
+
+        cv2.rectangle(annotated, (x1, text_top), (text_right, text_bottom), color, -1)
         cv2.putText(
             annotated,
-            f"{label} {confidence:.0%}",
-            (x1, max(y1 - 8, 10)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (59, 130, 246),
-            2
+            label_text,
+            (x1 + 4, text_bottom - 4),
+            font,
+            font_scale,
+            (255, 255, 255),
+            text_thickness,
+            cv2.LINE_AA
         )
 
     _, buffer = cv2.imencode(".jpg", cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR))
