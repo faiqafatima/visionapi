@@ -10,30 +10,27 @@ from typing import List, Optional
 from dotenv import load_dotenv
 import io
 import numpy as np
+import base64
+import cv2
 import os
 import torch
 from database import get_db, engine
 from models import User, Analysis, Base
-
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 
 load_dotenv()
 
-# --- create tables in DB automatically on startup ---
 Base.metadata.create_all(bind=engine)
 
-# --- password hashing setup ---
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# --- JWT setup ---
 SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = os.getenv("ALGORITHM")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES"))
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
-# --- Response shapes ---
 class DetectedObject(BaseModel):
     label: str
     confidence: float
@@ -44,6 +41,7 @@ class AnalysisResponse(BaseModel):
     model_used: str
     objects_detected: int
     detections: List[DetectedObject]
+    annotated_image: Optional[str] = None
 
 class UserCreate(BaseModel):
     email: str
@@ -53,7 +51,6 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
-# --- App setup ---
 app = FastAPI(title="VisionAPI", version="2.0.0")
 
 app.add_middleware(
@@ -63,9 +60,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Monkey-patch torch.load to use weights_only=False for compatibility with PyTorch 2.6.
-# Ultralytics calls torch.load() internally without this flag, causing errors when
-# loading YOLOv8 weights that contain arbitrary Python classes (e.g. Sequential).
 _original_torch_load = torch.load
 def patched_torch_load(f, *args, **kwargs):
     if 'weights_only' not in kwargs:
@@ -76,7 +70,6 @@ torch.load = patched_torch_load
 model = YOLO("yolov8s.pt")
 print("Model loaded")
 
-# --- Helper functions ---
 def hash_password(password: str):
     return pwd_context.hash(password)
 
@@ -102,11 +95,9 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise HTTPException(status_code=401, detail="User not found")
     return user
 
-# --- Endpoints ---
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": "yolov8n", "version": "2.0.0"}
-
+    return {"status": "ok", "model": "yolov8s", "version": "2.0.0"}
 
 @app.post("/register", status_code=201)
 def register(user_data: UserCreate, db: Session = Depends(get_db)):
@@ -122,7 +113,6 @@ def register(user_data: UserCreate, db: Session = Depends(get_db)):
     db.refresh(user)
     return {"message": "Account created", "email": user.email}
 
-
 @app.post("/login", response_model=Token)
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == form_data.username).first()
@@ -130,7 +120,6 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
         raise HTTPException(status_code=401, detail="Wrong email or password")
     token = create_token({"sub": user.email})
     return {"access_token": token, "token_type": "bearer"}
-
 
 @app.post("/analyze", response_model=AnalysisResponse)
 async def analyze(
@@ -147,15 +136,34 @@ async def analyze(
 
     results = model(image_np)
     detections = []
+    annotated = image_np.copy()
 
     for box in results[0].boxes:
+        label = model.names[int(box.cls[0])]
+        confidence = round(float(box.conf[0]), 3)
+        bbox = [round(x, 1) for x in box.xyxy[0].tolist()]
+
         detections.append(DetectedObject(
-            label=model.names[int(box.cls[0])],
-            confidence=round(float(box.conf[0]), 3),
-            bbox=[round(x, 1) for x in box.xyxy[0].tolist()]
+            label=label,
+            confidence=confidence,
+            bbox=bbox
         ))
 
-    # save to database
+        x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), (59, 130, 246), 2)
+        cv2.putText(
+            annotated,
+            f"{label} {confidence:.0%}",
+            (x1, max(y1 - 8, 10)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (59, 130, 246),
+            2
+        )
+
+    _, buffer = cv2.imencode(".jpg", cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR))
+    annotated_b64 = base64.b64encode(buffer).decode("utf-8")
+
     analysis = Analysis(
         user_id=current_user.id,
         filename=file.filename,
@@ -166,11 +174,11 @@ async def analyze(
 
     return AnalysisResponse(
         filename=file.filename,
-        model_used="yolov8n",
+        model_used="yolov8s",
         objects_detected=len(detections),
-        detections=detections
+        detections=detections,
+        annotated_image=annotated_b64
     )
-
 
 @app.get("/history")
 def history(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
